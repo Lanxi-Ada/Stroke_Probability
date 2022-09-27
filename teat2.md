@@ -4,7 +4,7 @@ Lanxi Zhang
 9/27/2022
 
 ``` r
-print("idk")
+print("idk,nono")
 ```
 
-    ## [1] "idk"
+    ## [1] "idk,nono"
