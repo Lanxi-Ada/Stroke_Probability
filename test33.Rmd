@@ -2,10 +2,10 @@
 title: "teat33"
 author: "Lanxi Zhang"
 date: "9/27/2022"
-output: html_document
+output: github_document
 ---
 
 ```{r}
-print("why")
+print("whynnmnnnnnnnnnnnnnnnnnnnomaaagbbbn")
 ```
 
