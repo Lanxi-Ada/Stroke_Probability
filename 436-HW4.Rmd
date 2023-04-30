@@ -1,0 +1,235 @@
+---
+title: "436-hw4"
+author: "Lanxi Zhang"
+date: "4/27/2023"
+output: html_document
+---
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggcorrplot)
+library(mice)
+library(ROSE)
+library(plotly)
+```
+
+```{r}
+data <- read_csv("https://raw.githubusercontent.com/Lanxi-Ada/Lanxi/master/healthcare-dataset-stroke-data.csv")
+# data 
+```
+
+## Shiny
+
+```{r}
+library(shiny)
+library(plotly)
+library(RColorBrewer)
+
+
+ui <- fluidPage(
+  titlePanel("Stroke Data Visualization"),
+  tabsetPanel(
+    tabPanel("Scatterplot",
+             plotlyOutput(outputId = "scatterplot"),
+             selectInput(inputId = "scatter_x", label = "X-axis:", choices = c("age","avg_glucose_level","bmi"), selected = "age"),
+             selectInput(inputId = "scatter_y", label = "Y-axis:", choices = c("age","avg_glucose_level","bmi"), selected = "bmi")),
+
+    tabPanel("Pie Chart",
+             selectInput(inputId = "pie_var", label = "Variable:", choices = c("gender", "ever_married", "work_type", "Residence_type", "smoking_status"), selected = "smoking_status"),
+             plotlyOutput(outputId = "piechart"))
+  )
+)
+
+
+server <- function(input, output) {
+  plot_data <- reactive({
+    data %>% 
+      group_by(!!sym(input$pie_var)) %>% 
+      summarize(count = n(), stroke_count = sum(stroke)) %>% 
+      arrange(desc(count))
+  })
+
+  output$scatterplot <- renderPlotly({
+    plot_ly(data, x = ~get(input$scatter_x), y = ~get(input$scatter_y), color = ~stroke, type = "scatter", mode = "markers") %>% 
+      layout(title = paste(input$scatter_x, "vs.", input$scatter_y),
+             xaxis = list(title = input$scatter_x),
+             yaxis = list(title = input$scatter_y))
+  })
+
+  output$piechart <- renderPlotly({
+    colors <- brewer.pal(length(plot_data()), "Set3")
+    plot_ly(plot_data(), labels = plot_data()[[1]], values = plot_data()[[3]] / plot_data()[[2]], type = "pie", hole = 0.6, textfont = list(family = "Arial"), marker = list(colors = colors, line = list(color = "#FFFFFF", width = 1))) %>% 
+      layout(title = paste(input$pie_var, "and Stroke"),
+             showlegend = TRUE,
+             legend = list(orientation = "h", x = 0.5, y = -0.1),
+             paper_bgcolor = "#FFFFFF",
+             plot_bgcolor = "#FFFFFF")
+  })
+}
+
+
+# shinyApp(ui, server)
+
+```
+
+## Data processing
+
+```{r}
+data1 <- data %>% 
+   mutate(gender = replace(gender, gender == "Male", 1)) %>% 
+   mutate(gender = replace(gender, gender == "Female", 0)) %>% 
+   mutate(ever_married = replace(ever_married, ever_married == "Yes", 1)) %>% 
+   mutate(ever_married = replace(ever_married, ever_married == "No", 0)) %>% 
+   mutate(work_type = replace(work_type, work_type == "Never_worked", 0)) %>% 
+   mutate(work_type = replace(work_type, work_type == "children", 1)) %>% 
+   mutate(work_type = replace(work_type, work_type == "Govt_job", 2)) %>% 
+   mutate(work_type = replace(work_type, work_type == "Self-employed", 3)) %>% 
+   mutate(work_type = replace(work_type, work_type == "Private", 4)) %>% 
+   mutate(Residence_type = replace(Residence_type, Residence_type == "Urban", 1)) %>% 
+   mutate(Residence_type = replace(Residence_type, Residence_type == "Rural", 0)) %>% 
+   mutate(bmi = replace(bmi, bmi == "N/A", NA)) %>% 
+   mutate(smoking_status = replace(smoking_status, smoking_status == "Unknown", NA)) %>% 
+   mutate(smoking_status = replace(smoking_status, smoking_status == "formerly smoked", 1)) %>% 
+   mutate(smoking_status = replace(smoking_status, smoking_status == "never smoked", 0)) %>% 
+   mutate(smoking_status = replace(smoking_status, smoking_status == "smokes", 2))
+```
+
+### Missing value interpolation
+
+```{r}
+library(mice)
+data1 <- as.data.frame(sapply(data1, as.numeric))
+imputed_data <- mice(data1[-1], m = 5, maxit = 50, method = "pmm")
+
+completed_data <- complete(imputed_data)
+```
+
+### Balanced data
+
+```{r}
+library(ROSE)
+
+table(completed_data$stroke)
+
+# Upsampling using the ROSE package
+final_completed_data  <- ovun.sample(stroke ~ ., data = completed_data , method = "over", N = 2 * nrow(completed_data), seed = 123)$data
+
+# View the distribution of processed data
+table(final_completed_data$stroke)
+```
+
+
+### Correlation Matrix
+
+
+```{r}
+library(ggcorrplot)
+data_com <- na.omit(final_completed_data)
+corr_matrix <- cor(data_com)
+ggcorrplot(corr_matrix, type = "lower", 
+           lab = TRUE, lab_size = 2.5, 
+           colors = c("#6D9EC1", "white", "#E46726"), 
+           title = "Correlation Matrix of Stroke Data")
+```
+
+## Dimension reduction
+
+### PCA
+
+```{r}
+pca_result <- prcomp(final_completed_data, scale=FALSE)
+pca_result$rotation
+# select the number of principal component
+screeplot(pca_result, type="lines")
+```
+```{r}
+pca_df <- data.frame(predict(pca_result, final_completed_data))[c(1,2,3)]
+df <- cbind(final_completed_data, pca_df)
+```
+
+```{r}
+library(plotly)
+df$stroke <- as.factor(df$stroke)
+plot_ly(df, x=~PC1, y=~PC2, z=~PC3, color=~stroke,marker=list(size=3,opacity=0.1)) 
+```
+```{r}
+# Assume that pca_result is the result of PCA analysis that has been performed
+library(factoextra)
+fviz_contrib(pca_result, choice = "var", axes = 1:9, top = 10)
+```
+
+### Umap
+
+```{r}
+library(umap)
+data_matrix <- as.matrix(final_completed_data)
+umap_result <- umap(data_matrix)
+```
+
+
+
+
+```{r}
+library(ggplot2)
+umap_df <- data.frame(X1 = umap_result$layout[,1], X2 = umap_result$layout[,2])
+umap_df1 <- cbind(umap_df,final_completed_data)
+```
+
+
+```{r}
+ggplot(umap_df1, aes(X1,X2)) +
+  geom_point(aes(color = stroke), alpha = 0.7, size = 1.5)
+```
+
+### Divide the training set test set
+
+
+```{r}
+library(caret)
+set.seed(123)
+trainIndex <- createDataPartition(umap_df1$stroke, p = 0.8, list = FALSE) 
+
+# Divide the data set into 80% training set and 20% test set
+train <- umap_df1[trainIndex, ]
+test <- umap_df1[-trainIndex, ]
+```
+
+
+
+### Training SVM
+
+
+```{r}
+library(e1071)
+# SVM Model
+svm_model <- svm(stroke ~ X1+X2, data = train, kernel = "radial", cost = 10, probability = TRUE)
+svm_pred <- predict(svm_model, test, probability = TRUE)
+```
+
+
+```{r}
+svm_pred1 <- ifelse(svm_pred > 0.5, 1, 0)
+confusionMatrix(as.factor(svm_pred1), as.factor(test$stroke))
+```
+
+
+
+### Predict
+
+
+```{r}
+result <- data.frame(actual = test$stroke, predict = svm_pred1)
+result <- cbind(result,test)
+
+library(plotly)
+plot_ly(result, x=~X1, y=~X2,  color=~factor(predict), text = ~paste("Actual：", factor(actual)), showlegend = TRUE,marker=list(size=7,opacity=0.8)) %>% 
+  layout(title = "Predict result in test data")
+```
+
+
+
+
+
+
+
